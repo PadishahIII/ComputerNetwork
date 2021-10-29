@@ -2,6 +2,7 @@
 #include <iostream>
 using namespace std;
 
+//./bin/server 8889
 int main(int argc, char **args)
 {
     cout << "in main" << endl;

@@ -63,8 +63,8 @@ public:
         "baidu.com",
         ""};
 
-    server::server(int ProxyServerPort);
-    server::server();
+    server(int ProxyServerPort);
+    server();
     void InitSocket(); //配置 socket bind listen epollinit
     HttpParser ParseHttpHead(char *buffer);
     int ConnectToServer(char *host, int port); //代理服务器充当客户端访问其它服务器
