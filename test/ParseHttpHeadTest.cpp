@@ -5,6 +5,7 @@
 #include <vector>
 #include <regex>
 #include "HttpHeader.h"
+#include <string.h>
 #include <stdlib.h>
 using namespace std;
 
@@ -18,11 +19,20 @@ int main()
 
     char *str = "GET xx 1.1\r\nk1:12\r\nk2:23\r\nk3:34\r\n\r\nxx\r\nxx"; //  [line 2]
     puts("aaaa\n");
+    puts(str);
     //HttpHeader hh = HttpHeader(str);
-    HttpHeader *hh = &a(str);
+    HttpHeader hh = HttpHeader(str);
     //a(str, &hh);
-    hh->print();
+    hh.print();
     puts("aaaa\n");
+    char *line = "newline";
+    char *des = (char *)malloc(sizeof(str) + sizeof(line));
+    HttpHeader::CatLine(str, des, line);
+    puts("des:\n");
+    puts(des);
+
+    hh.Parse(des);
+    hh.print();
 
     //hh.print();
     exit(0);

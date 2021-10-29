@@ -31,8 +31,8 @@ namespace std
         atomic<int> _idlThrNum{0};     //空闲线程数量
 
     public:
-        inline threadpool(unsigned short size = 4) { addThread(size); }
-        inline ~threadpool()
+        threadpool(unsigned short size = 4) { addThread(size); }
+        ~threadpool()
         {
             _run = false;
             _task_cv.notify_all(); // 唤醒所有线程执行
