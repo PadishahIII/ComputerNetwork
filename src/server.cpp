@@ -91,18 +91,19 @@ void server::Start()
 
                 //建立和客户端通信的的fd，即之后的clientFd，非阻塞
                 int cfd = accept(this->ProxyServerFd, (struct sockaddr *)&clientAddr, &len);
-                int flag = fcntl(cfd, F_GETFL);
-                if (flag == -1)
-                {
-                    perror("fcntl");
-                    exit(-1);
-                }
-                flag |= O_NONBLOCK;
-                if (fcntl(cfd, F_SETFL, flag) == -1)
-                {
-                    perror("fcntl");
-                    exit(-1);
-                }
+                //TODO:
+                //int flag = fcntl(cfd, F_GETFL);
+                //if (flag == -1)
+                //{
+                //    perror("fcntl");
+                //    exit(-1);
+                //}
+                //flag |= O_NONBLOCK;
+                //if (fcntl(cfd, F_SETFL, flag) == -1)
+                //{
+                //    perror("fcntl");
+                //    exit(-1);
+                //}
                 struct epoll_event epev;
                 epev.events = EPOLLIN;
                 epev.data.fd = cfd;
@@ -138,30 +139,35 @@ void server::Start()
                 }
                 else if (len > 0)
                 {
-                    //int re = len;
-                    //int sum = sizeof(buffer) - len;
-                    std::cout << "Reading..." << endl;
-                    //while (re > 0)
-                    //{
-                    int re = read(clientFd, buffer, sizeof(buffer));
-                    //sum -= re;
-                    //}
+                    //                    int re = len;
+                    //                    int sum = sizeof(buffer) - len;
+                    //std::cout << "Reading..." << endl;
+                    //                    while (re > 0)
+                    //                    {
+                    cout << "buffer:" << endl;
+                    puts(buffer);
+                    cout << "buffer size:" << len << endl;
+                    //                        cout << "In Read" << endl;
+                    //                        int re = read(clientFd, buffer + sizeof(buffer) - sum, sum);
+                    //
+                    //                        sum -= re;
+                    //                    }
+                    //                    if (re == -1)
+                    //                    {
+                    //                        if (errno & EAGAIN)
+                    //                        {
+                    //                        }
+                    //                        else
+                    //                        {
+                    //                            perror("read");
+                    //                            exit(-1);
+                    //                        }
+                    //                    }
                     std::cout << "Handle proxy logic...." << endl;
-                    if (re == -1)
-                    {
-                        if (errno & EAGAIN)
-                        {
-                        }
-                        else
-                        {
-                            perror("read");
-                            exit(-1);
-                        }
-                    }
 
                     //读取数据并处理HTTP请求
-                    this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, clientFd));
-                    //HandleHttpRequest(buffer, clientFd);
+                    this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, clientFd, len));
+                    //HandleHttpRequest(buffer, clientFd,len);
                 }
             }
         }
@@ -183,7 +189,7 @@ void server::closeFd(int clientFd)
  * 
  * 
  */
-void server::HandleHttpRequest(char *buffer, int clientFd)
+void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 {
     epoll_ctl(this->epollFd, EPOLL_CTL_DEL, clientFd, NULL);
 
@@ -192,8 +198,10 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
 
     //TODO:
     struct HttpHeader hh;
-    char sendBuffer[1024];
-    ParseHttpHeader(buffer, &hh, sendBuffer);
+    char *sendBuffer = new char[sizeof(buffer) + 1];
+    memset(sendBuffer, 0, sizeof(sendBuffer)); //'\0'
+    memcpy(sendBuffer, buffer, sizeof(buffer));
+    ParseHttpHeader(buffer, &hh);
     //TODO:
 
     //std::cout << "Buffer:*" << endl;
@@ -223,6 +231,14 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
         std::cout << "[Ban]:" << h << endl;
         closeFd(clientFd);
         return;
+    }
+    else if (TransList.find(h) != TransList.end())
+    {
+        std::cout << "[Trans]:" << h << endl;
+        string target = TransList[h];
+        const char *target_c = target.c_str();
+        replace(sendBuffer, h, target);
+        memcpy(hh.host, target_c, target.length() + 1);
     }
     //    if (PassList.find(h) != PassList.end())
     //        ;
@@ -265,16 +281,17 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
     saddr.sin_port = htons(port);
 
     //TODO:
-    //struct hostent *hostent = gethostbyname(host); //DNS
-    //if (!hostent)
-    //{
-    //    std::cout << "In hostent:failed! *********" << endl;
-    //}
-    //in_addr Inaddr = *((in_addr *)*hostent->h_addr_list);
+    struct hostent *hostent = gethostbyname(host); //DNS
+    if (!hostent)
+    {
+        std::cout << "In hostent:failed! *********" << endl;
+        return;
+    }
+    in_addr Inaddr = *((in_addr *)*hostent->h_addr_list);
     //TODO:
 
-    inet_pton(AF_INET, "111.13.100.92", &saddr.sin_addr.s_addr); //TODO:
-    //saddr.sin_addr.s_addr = inet_addr(inet_ntoa(Inaddr));
+    //inet_pton(AF_INET, "111.13.100.92", &saddr.sin_addr.s_addr); //TODO:
+    saddr.sin_addr.s_addr = inet_addr(inet_ntoa(Inaddr));
 
     std::cout << "connecting to server "
               << "host=" << host << "  port=" << port << endl;
@@ -289,34 +306,36 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
         return;
     }
     std::cout << "sending http msg to server..." << endl;
+    puts(buffer); //buffer
 
     //char *ffff = "GET / HTTP/1.1\r\nHost: baidu.com\r\n\r\nxx"; //\r\nHost: baidu.com\r\n\r\n  Bad request
     //发送http报文
     int sum = 0;
-    while (sum < sizeof(buffer)) //buffer
+    //while (sum < sizeof(buffer)) //buffer
+    //{
+    cout << "in Write" << endl;
+    int re = write(fd, buffer, buffersize); //buffer
+    cout << "write size:" << re << endl;
+    if (re == -1)
     {
-        int re = write(fd, buffer, sizeof(buffer)); //buffer
-        if (re == -1)
+        if (errno & EAGAIN)
         {
-            if (errno & EAGAIN)
-            {
-                continue;
-            }
-            else
-            {
-                perror("write1");
-                exit(-1);
-            }
+            //continue;
         }
-        if (re > 0)
-            sum += re;
-        else if (re == 0)
+        else
         {
-            closeFd(clientFd);
-            return;
+            perror("write1");
+            exit(-1);
         }
     }
-    puts(buffer); //buffer
+    if (re > 0)
+        sum += re;
+    else if (re == 0)
+    {
+        closeFd(clientFd);
+        return;
+    }
+    //}
     std::cout << "send finished. waiting for reponse..." << endl;
 
     char buf[1024];
@@ -353,7 +372,7 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
             while (s < count)
             {
                 std::cout << "In Count Loop" << endl;
-                int re = write(clientFd, buf, sizeof(buf)); //TODO:
+                int re = write(clientFd, buf, count); //TODO:
                 if (re == -1)
                 {
                     if (errno & EAGAIN)
@@ -406,7 +425,7 @@ void server::HandleHttpRequest(char *buffer, int clientFd)
     closeFd(clientFd);
 }
 
-void ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char sendBuffer[])
+void ParseHttpHeader(char buffer[], HttpHeader *httpHeader)
 {
     char *p;
     char *ptr;
@@ -423,15 +442,9 @@ void ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char sendBuffer[])
         memcpy(httpHeader->url, &p[5], strlen(p) - 14);
     }
 
-#ifdef test
-    printf("recv client = [%s]\n", p);
-#endif
     p = strtok_r(NULL, delim, &ptr);
     while (p)
     {
-#ifdef test
-        printf("recv client = [%s]\n", p);
-#endif
         switch (p[0])
         {
         case 'H': //Host
@@ -452,6 +465,16 @@ void ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char sendBuffer[])
         }
         p = strtok_r(NULL, delim, &ptr);
     }
+}
+void replace(char buffer_c[], const string &oldstr, const string &newstr)
+{
+    string buffer = string(buffer_c);
+    while (buffer.find(oldstr) != string::npos)
+    {
+        int l = buffer.find(oldstr);
+        buffer = buffer.substr(0, l) + newstr + buffer.substr(l + oldstr.length());
+    }
+    memcpy(buffer_c, buffer.c_str(), buffer.length() + 1);
 }
 
 //Http header

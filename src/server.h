@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <set>
 #include <netdb.h>
+#include <map>
 using namespace std;
 
 struct HttpHeader
@@ -38,7 +39,9 @@ struct HttpHeader
     }
 };
 
-void ParseHttpHeader(char *, HttpHeader *, char *);
+void ParseHttpHeader(char *, HttpHeader *);
+void replace(char buffer_c[], const string &oldstr, const string &newstr);
+
 class server
 {
 public:
@@ -62,13 +65,15 @@ public:
         "error.baidu.com",
         "baidu.com",
         ""};
+    map<string, string> TransList = {
+        {"error.baidu.com", "baidu.com"}, {"", ""}};
 
     server(int ProxyServerPort);
     server();
     void InitSocket(); //配置 socket bind listen epollinit
     HttpParser ParseHttpHead(char *buffer);
     int ConnectToServer(char *host, int port); //代理服务器充当客户端访问其它服务器
-    void HandleHttpRequest(char *buffer, int clientFd);
+    void HandleHttpRequest(char *buffer, int clientFd,int);
     void Start();
     void closeFd(int);
 
