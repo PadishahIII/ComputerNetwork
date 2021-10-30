@@ -71,11 +71,12 @@ public:
     server(int ProxyServerPort);
     server();
     void InitSocket(); //配置 socket bind listen epollinit
-    HttpParser ParseHttpHead(char *buffer);
+    HttpParser ParseHttpHead(char *buffer);//解析http头
     int ConnectToServer(char *host, int port); //代理服务器充当客户端访问其它服务器
-    void HandleHttpRequest(char *buffer, int clientFd,int);
+    void HandleHttpRequest(char *buffer, int clientFd,int);//处理客户端请求
     void Start();
-    void closeFd(int);
+    void closeFd(int);//关闭fd
+    void fcntlNonBlock(int);//设置非阻塞
 
     static void xx(){};
 };
