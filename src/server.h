@@ -33,8 +33,10 @@ struct HttpHeader
     char url[1024];         // host url
     char host[1024];        // host
     char cookie[1024 * 10]; //cookie
+    int port;
     HttpHeader()
     {
+        port = 80;
         memset(this, 0, sizeof(HttpHeader));
     }
 };
@@ -59,24 +61,26 @@ public:
 
     set<string> BanList = {
         //"error.baidu.com",
-        "functional.events.data.microsoft.com:443",
+        //"functional.events.data.microsoft.com:443",
+        //"baidu.com",
+        "c.urs.microsoft.com",
         ""};
     set<string> PassList = {
         "error.baidu.com",
         "baidu.com",
         ""};
     map<string, string> TransList = {
-        {"error.baidu.com", "baidu.com"}, {"", ""}};
+        {"", ""}};
 
     server(int ProxyServerPort);
     server();
-    void InitSocket(); //配置 socket bind listen epollinit
-    HttpParser ParseHttpHead(char *buffer);//解析http头
-    int ConnectToServer(char *host, int port); //代理服务器充当客户端访问其它服务器
-    void HandleHttpRequest(char *buffer, int clientFd,int);//处理客户端请求
+    void InitSocket();                                       //配置 socket bind listen epollinit
+    HttpParser ParseHttpHead(char *buffer);                  //解析http头
+    int ConnectToServer(string host, int port);              //代理服务器充当客户端访问其它服务器
+    void HandleHttpRequest(char *buffer, int clientFd, int); //处理客户端请求
     void Start();
-    void closeFd(int);//关闭fd
-    void fcntlNonBlock(int);//设置非阻塞
+    void closeFd(int);       //关闭fd
+    void fcntlNonBlock(int); //设置非阻塞
 
     static void xx(){};
 };
