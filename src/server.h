@@ -12,7 +12,6 @@
 #include <netinet/in.h>
 #include <sys/epoll.h>
 //#include "HttpHeader.h"
-#include "HttpParser.h"
 #include <arpa/inet.h>
 #include <string.h>
 #include <regex>
@@ -25,6 +24,9 @@
 #include <set>
 #include <netdb.h>
 #include <map>
+#include "epoller.h"
+
+#define debug
 using namespace std;
 
 struct HttpHeader
@@ -41,7 +43,6 @@ struct HttpHeader
     }
 };
 
-void ParseHttpHeader(char *, HttpHeader *);
 void replace(char buffer_c[], const string &oldstr, const string &newstr);
 
 class server
@@ -56,8 +57,7 @@ public:
     struct sockaddr_in ProxyServerAddr;
     int ProxyServerPort = 8888; //代理服务器端口
 
-    int epollFd;                          //epoll实例
-    struct epoll_event epollEvents[1024]; //要监听的文件描述符
+    Epoller *epoller = new Epoller();
 
     set<string> BanList = {
         //"error.baidu.com",
@@ -75,14 +75,19 @@ public:
     server(int ProxyServerPort);
     server();
     void InitSocket();                                       //配置 socket bind listen epollinit
-    HttpParser ParseHttpHead(char *buffer);                  //解析http头
     int ConnectToServer(string host, int port);              //代理服务器充当客户端访问其它服务器
     void HandleHttpRequest(char *buffer, int clientFd, int); //处理客户端请求
+    void ParseHttpHeader(char *, HttpHeader *, char *);
     void Start();
-    void closeFd(int);       //关闭fd
+    void CloseConn(int);     //关闭fd
     void fcntlNonBlock(int); //设置非阻塞
 
-    static void xx(){};
+    void DealListen();
+    void DealRead(int);
+
+    bool Recv(int, void *, size_t, int);
+    bool Send(int, const void *, size_t, int);
+    bool Select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 };
 
 #endif

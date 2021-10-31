@@ -1,7 +1,9 @@
 #include "server.h"
 using namespace std;
 
-server::server() {}
+server::server()
+{
+}
 server::server(int ProxyServerPort)
 {
     this->ProxyServerPort = ProxyServerPort;
@@ -25,11 +27,6 @@ void server::InitSocket()
     listen(this->ProxyServerFd, 8);
 
     //epoll init
-    this->epollFd = epoll_create(100);
-    struct epoll_event epev;
-    epev.events = EPOLLIN;
-    epev.data.fd = this->ProxyServerFd; //监听代理服务器fd
-    epoll_ctl(this->epollFd, EPOLL_CTL_ADD, this->ProxyServerFd, &epev);
 }
 
 /**
@@ -52,15 +49,15 @@ int server::ConnectToServer(string host, int port)
     struct sockaddr_in saddr;
     bzero(&saddr, sizeof(saddr));
     saddr.sin_family = PF_INET;
-    int port = port; //TODO:
-    saddr.sin_port = htons(port);
+    int port_ = port; //TODO:
+    saddr.sin_port = htons(port_);
 
     //DNS解析
     struct hostent *hostent = gethostbyname(host_c); //DNS
     if (!hostent)
     {
         std::cout << "In hostent:failed! *********" << endl;
-        closeFd(fd);
+        CloseConn(fd);
         return -1;
     }
     in_addr Inaddr = *((in_addr *)*hostent->h_addr_list);
@@ -73,25 +70,19 @@ int server::ConnectToServer(string host, int port)
     //inet_pton(AF_INET, "111.13.100.92", &saddr.sin_addr.s_addr); //inet_ntoa(Inaddr)
     saddr.sin_addr.s_addr = inet_addr(inet_ntoa(Inaddr)); //connect error
 
-    std::cout << "connecting to server "
-              << "host=" << host_c << "  port=" << port << endl;
-
     if (connect(fd, (struct sockaddr *)&saddr, sizeof(saddr)) == -1)
     {
         std::cout << "connect error..." << endl;
         std::cout << "----------------------------------" << endl;
-        closeFd(fd);
+        CloseConn(fd);
         return -1;
     }
+    std::cout << "already connect to server "
+              << "host=" << host_c << "  port=" << port << endl;
 
     return fd;
 }
 
-//buffer:HTTP报文整体-------unused
-HttpParser server::ParseHttpHead(char *buffer)
-{
-    return HttpParser(buffer);
-}
 void server::fcntlNonBlock(int cfd)
 {
 
@@ -116,92 +107,79 @@ void server::Start()
     InitSocket();
     while (1)
     {
-        int ret = epoll_wait(this->epollFd, this->epollEvents, 1024, -1);
-        if (ret == -1)
+        int eventCnt = epoller->Wait(-1); //无事件将阻塞
+        for (int i = 0; i < eventCnt; i++)
         {
-            perror("epoll_wait");
-            exit(-1);
-        }
-        for (int i = 0; i < ret; i++)
-        {
-            int clientFd = this->epollEvents[i].data.fd;
-            int events = this->epollEvents[i].events;
-
-            if (clientFd == this->ProxyServerFd)
+            int fd = epoller->GetEventFd(i);
+            uint32_t events = epoller->GetEvents(i);
+            if (fd == this->ProxyServerFd)
             {
-                std::cout << "New client request..." << endl;
-                //有新的客户端TCP请求，加入epoll监听
-                struct sockaddr_in clientAddr;
-                socklen_t len = sizeof(clientAddr);
-
-                //建立和客户端通信的的fd，即之后的clientFd
-                int cfd = accept(this->ProxyServerFd, (struct sockaddr *)&clientAddr, &len);
-
-                std::cout << "fd:" << cfd << endl;
-
-                struct epoll_event epev;
-                epev.events = EPOLLIN;
-                epev.data.fd = cfd;
-                epoll_ctl(this->epollFd, EPOLL_CTL_ADD, cfd, &epev);
-                std::cout << "Handle client request finished..." << endl;
+                DealListen();
             }
-            else
+            else if (events & EPOLLOUT)
             {
                 //从已连接的客户端接受到信息（忽略服务器的写）
-                if (events & EPOLLOUT)
-                {
-                    continue;
-                }
-                if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
-                {
-                    closeFd(clientFd);
-                }
-                std::cout << "Receive msg from a client..." << endl;
-                char buffer[1024] = {0};
-                int len = recv(clientFd, buffer, sizeof(buffer), 0);
-
-                if (len == -1)
-                {
-                    perror("recv1");
-                    std::cout << "error fd is:" << clientFd << endl;
-                    exit(-1);
-                }
-                else if (len == 0) //收到了End of file
-                {
-                    std::cout << "A client has disconnected..." << endl; //应该在处理完这一次http请求后再断开
-
-                    //和客户端断开连接，则取消对clientfd的监听，关闭为其打开的文件描述符
-                    epoll_ctl(this->epollFd, EPOLL_CTL_DEL, clientFd, NULL);
-                    close(clientFd);
-                }
-                else if (len > 0)
-                {
-                    cout << "buffer:" << endl;
-                    puts(buffer);
-                    cout << "buffer size:" << len << endl;
-                    std::cout << "Handle proxy logic...." << endl;
-
-                    //取消监听防止冲突
-                    if (epoll_ctl(this->epollFd, EPOLL_CTL_DEL, clientFd, NULL) == -1)
-                    {
-                        perror("epoll_ctl_DEL");
-                        exit(-1);
-                    }
-                    std::cout << "del epoll, fd :" << clientFd << endl;
-                    //读取数据并处理HTTP请求
-                    this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, clientFd, len));
-                    //HandleHttpRequest(buffer, clientFd, len);
-                }
+                continue;
+            }
+            else if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
+            {
+                CloseConn(fd);
+            }
+            else if (events & EPOLLIN)
+            {
+                DealRead(fd);
             }
         }
     }
-    close(this->ProxyServerFd);
-    close(this->epollFd);
+}
+void server::DealListen()
+{
+#ifdef debug
+    std::cout << "New client request..." << endl;
+#endif
+    //有新的客户端TCP请求，加入epoll监听
+    struct sockaddr_in clientAddr;
+    socklen_t len = sizeof(clientAddr);
+
+    //建立和客户端通信的的fd，即之后的clientFd
+    int cfd = accept(this->ProxyServerFd, (struct sockaddr *)&clientAddr, &len);
+    if (cfd <= 0)
+        return;
+#ifdef debug
+    std::cout << "fd:" << cfd << endl;
+#endif
+    epoller->AddFd(cfd, EPOLLIN);
+#ifdef debug
+    std::cout << "Handle client request finished..." << endl;
+#endif
 }
 
-void server::closeFd(int clientFd)
+void server::DealRead(int fd)
 {
-    epoll_ctl(this->epollFd, EPOLL_CTL_DEL, clientFd, NULL);
+#ifdef debug
+    std::cout << "Receive msg from a client..." << endl;
+#endif
+    char buffer[MAXSIZE] = {0};
+    int ret = Recv(fd, buffer, sizeof(buffer), 0);
+    if (ret <= 0)
+    {
+        //和客户端断开连接，则取消对clientfd的监听，关闭为其打开的文件描述符
+        CloseConn(fd);
+        return;
+    }
+#ifdef debug
+    cout << "buffer:" << endl;
+    puts(buffer);
+    cout << "buffer size:" << ret << endl;
+    std::cout << "Handle proxy logic...." << endl;
+#endif
+    //读取数据并处理HTTP请求
+    this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, fd, ret));
+    //HandleHttpRequest(buffer, clientFd, len);
+}
+void server::CloseConn(int clientFd)
+{
+    epoller->DelFd(clientFd);
     close(clientFd);
 }
 
@@ -212,170 +190,90 @@ void server::closeFd(int clientFd)
  */
 void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 {
-
-    //HttpParser httpParser = HttpParser(buffer);
-
     //解析http头的过程会改变buffer
-    char *copyBuffer = new char[buffersize];
-    memcpy(copyBuffer, buffer, buffersize);
+    //char *copyBuffer = new char[buffersize];
+    //memcpy(copyBuffer, buffer, buffersize);
 
     //解析http头
     struct HttpHeader httpHeader;
     char *sendBuffer = new char[buffersize + 1];
     memset(sendBuffer, 0, sizeof(sendBuffer)); //'\0'
     memcpy(sendBuffer, buffer, buffersize);
-    ParseHttpHeader(buffer, &httpHeader);
+    ParseHttpHeader(buffer, &httpHeader, sendBuffer);
 
-    //打印解析得到的host
-    std::cout << "host:";
-    puts(httpHeader.host);
-    std::cout << "port:";
-    std::cout << to_string(httpHeader.port) << std::endl;
-
-    //提取出host,充当客户端转发
     string host = httpHeader.host;
-    //string h = "baidu.com";
-
-    if (BanList.find(host) != BanList.end()) //BanList
-    {
-        std::cout << "[Ban]:" << host << endl;
-        closeFd(clientFd);
-        return;
-    }
-    else if (TransList.find(host) != TransList.end()) //TransList
-    {
-        std::cout << "[Trans]:" << host << endl;
-        string target = TransList[host];
-        const char *target_c = target.c_str();
-        replace(sendBuffer, host, target);
-        memcpy(httpHeader.host, target_c, target.length() + 1);
-        host = target;
-    }
-
+    int re;
     int fd = ConnectToServer(host, httpHeader.port);
     if (fd == -1)
-    {
-        closeFd(clientFd);
-        return;
-    }
+        goto error;
 
+#ifdef debug
     std::cout << "sending http msg to server..." << endl;
-
-    //char *request = "GET / HTTP/1.1\r\nHost: baidu.com\r\n\r\nxx"; //  Bad request
+#endif
 
     //发送http报文
-    cout << "in Write" << endl;
-    //while (1)
-    //{
-    int re = send(fd, copyBuffer, buffersize, 0); //sendbufferTODO:
+    re = Send(fd, sendBuffer, buffersize, 0);
+    if (re <= 0)
+        goto error;
 
-    cout << "write size:" << re << endl;
-
-    if (re == -1)
-    {
-        if (errno & EAGAIN)
-        {
-            std::cout << "send1:EAGAIN" << std::endl;
-            //continue;
-        }
-        else
-        {
-            perror("send");
-            exit(-1);
-        }
-    }
-    else if (re == 0)
-    {
-        closeFd(clientFd);
-        return;
-    }
-    //}
+#ifdef debug
     std::cout << "send finished. waiting for reponse..." << endl;
+#endif
 
-    char buf[65536];
+    //char buf[65536];
+
+    fd_set fdread;
+    timeval tv;
 
     //获取应答
-    while (1) //checked
+
+    //bzero(buf, 65536);
+    while (1) //recv
     {
+        FD_ZERO(&fdread);
+        FD_SET(fd, &fdread); //serversock
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
 
-        bzero(buf, 65536);
-        while (1) //recv
+        int count = Select(0, &fdread, NULL, NULL, &tv);
+        if (count > 0)
         {
-            std::cout << "Inloop" << endl;
-            int count = read(fd, buf, sizeof(buf)); //若非阻塞，判断EAGAIN
-            if (count > 0)
+#ifdef debug
+            std::cout << "receive msg from server:" << endl
+                      << "-------------------------------" << endl;
+#endif
+            if (FD_ISSET(fd, &fdread))
             {
-                std::cout << "receive msg from server:" << endl
-                          << "-------------------------------" << endl;
-                //puts(buf);
-                std::cout << "-------------------------------------" << endl;
-                std::cout << "count:" << count << endl;
+                int re = Recv(fd, sendBuffer, sizeof(sendBuffer), 0);
+                if (re <= 0)
+                    goto error;
+#ifdef debug
+                puts(sendBuffer);
+                std::cout << "cout:" << re << endl;
                 std::cout << "writing to client..." << endl;
-
-                //将服务器的应答转发给客户端，由于是写操作(EPOLL_OUT)，不会触发epoll
-
-                int re = send(clientFd, buf, count, 0); //write
-
-                if (re == -1)
-                {
-                    if (errno & EAGAIN)
-                    {
-                        std::cout << "send2:EAGAIN" << std::endl;
-                        //continue;
-                    }
-                    else
-                    {
-                        perror("send");
-                        close(fd);
-                        closeFd(clientFd);
-                        return;
-                    }
-                }
-                else if (re > 0)
-                {
-                    cout << "write count:" << re << endl;
-                }
-                else if (re == 0)
-                {
-                    std::cout << "proxy logic finished" << endl;
-                    close(fd);
-                    closeFd(clientFd);
-                    return;
-                }
+#endif
+                re = Send(fd, sendBuffer, re, 0);
+                if (re <= 0)
+                    goto error;
             }
-            else if (count == -1) //recv
-            {
-                if (errno & EAGAIN)
-                {
-                    //std::cout << "recv:EAGAIN" << std::endl;
-                    continue;
-                }
-                else
-                {
-                    perror("recv");
-                    std::cout << "error fd is:" << clientFd << endl;
-                    close(fd);
-                    closeFd(clientFd);
-                    return; //recv
-                }
-            }
-            else if (count == 0) //服务器断开连接
-            {
-                //读完了
-                std::cout << "转发成功\n";
-                std::cout << "proxy logic finished" << endl;
-                close(fd);
-                closeFd(clientFd);
-                return; //recv
-            }
+#ifdef debug
+            std::cout << "-------------------------------------" << endl;
+#endif
         }
+        else
+            goto error;
     }
+#ifdef debug
     std::cout << "proxy logic finished" << endl;
+#endif
+    goto error; //TODO:
+error:
+    CloseConn(clientFd);
     close(fd);
-    closeFd(clientFd);
+    return;
 }
 
-void ParseHttpHeader(char buffer[], HttpHeader *httpHeader)
+void server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBuffer)
 {
     char *p;
     char *ptr;
@@ -430,6 +328,30 @@ void ParseHttpHeader(char buffer[], HttpHeader *httpHeader)
         }
         p = strtok_r(NULL, delim, &ptr);
     }
+#ifdef debug
+    //打印解析得到的host
+    std::cout << "host:";
+    puts(httpHeader->host);
+    std::cout << "port:";
+    std::cout << to_string(httpHeader->port) << std::endl;
+#endif
+    string host = httpHeader->host;
+
+    if (BanList.find(host) != BanList.end()) //BanList
+    {
+        std::cout << "[Ban]:" << host << endl;
+        //CloseConn(clientFd);
+        return;
+    }
+    else if (TransList.find(host) != TransList.end()) //TransList
+    {
+        std::cout << "[Trans]:" << host << endl;
+        string target = TransList[host];
+        const char *target_c = target.c_str();
+        replace(sendBuffer, host, target);
+        memcpy(httpHeader->host, target_c, target.length() + 1);
+        host = target;
+    }
 }
 void replace(char buffer_c[], const string &oldstr, const string &newstr)
 {
@@ -440,6 +362,59 @@ void replace(char buffer_c[], const string &oldstr, const string &newstr)
         buffer = buffer.substr(0, l) + newstr + buffer.substr(l + oldstr.length());
     }
     memcpy(buffer_c, buffer.c_str(), buffer.length() + 1);
+}
+bool server::Recv(int fd, void *buffer, size_t size, int flags)
+{
+    int len = recv(fd, buffer, size, flags);
+
+    if (len == -1)
+    {
+        perror("recv");
+#ifdef debug
+        std::cout << "error fd is:" << fd << endl;
+#endif
+        return false;
+    }
+    else if (len == 0) //收到了End of file
+    {
+#ifdef debug
+        std::cout << "A client has disconnected,fd=" << fd << endl; //应该在处理完这一次http请求后再断开
+#endif
+        return false;
+    }
+    return true;
+}
+bool server::Send(int fd, const void *buffer, size_t len, int flags)
+{
+    int re = send(fd, buffer, len, flags);
+#ifdef debug
+    cout << "write size:" << re << endl;
+#endif
+    if (re == -1)
+    {
+        perror("send");
+        return false;
+    }
+    else if (re == 0)
+    {
+        return false;
+    }
+    return true;
+}
+bool server::Select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *tv)
+{
+    int count = select(0, readfds, NULL, NULL, tv); //0代表不用内核检测，超时检测TODO:read=>select
+
+    if (count < 0) //recv
+    {
+        perror("select");
+        return false;
+    }
+    else if (count == 0) //服务器断开连接
+    {
+        return false;
+    }
+    return true;
 }
 
 //Http header
