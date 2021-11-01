@@ -9,3 +9,46 @@
 
 1.将host中的端口号分离出来
 2.改变设置非阻塞的方式：不用fcntl而是用recv、send
+
+Log:  Error:recv: Connection reset by peer
+
+New client request...
+fd:5
+Handle client request finished...
+Receive msg from a client...
+buffer:
+buffer size:236
+Handle proxy logic....
+host:www.bing.com
+port:443
+already connect to server host=www.bing.com  port=443
+sending http msg to server...
+write size:237
+send finished. waiting for reponse...
+recv: Connection reset by peer
+error fd is:6
+
+---
+
+Log:
+某一段请求报文中包含了html：
+Receive msg from a client...
+buffer:
+GET http://www.hit.edu.cn/_upload/tpl/02/c8/712/template712/css/style.css?v=1635783945010 HTTP/1.1
+Host: www.hit.edu.cn
+Proxy-Connection: keep-alive
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36 Edg/92.0.902.84
+DNT: 1
+Accept: text/css,*/*;q=0.1
+Referer: http://www.hit.edu.cn/
+Accept-Encoding: gzip, deflate
+Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6
+
+
+                 
+                <a href=""><a href='http://hit.alljournals.cn/home/default.aspx' target='' title='学报编辑部'>学报编辑部</a></a> 
+                 
+                <a href=""><a href='http://hit.alljournals.cn/home/#auditing_article_list_simple_ui' target='' title='哈工大学报（社科版）'>哈工大学报（社科版）</a></a> 
+                 
+              </div>
+              ...

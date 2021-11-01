@@ -26,7 +26,12 @@
 #include <map>
 #include "epoller.h"
 
-#define debug
+//#define debug
+//#define printIP
+#define run
+//#define IP
+//#define filter
+
 using namespace std;
 
 struct HttpHeader
@@ -53,7 +58,7 @@ public:
 
     threadpool *tpl; //线程池
 
-    char buffer[MAXSIZE];
+    //char buffer[MAXSIZE];
 
     int ProxyServerFd; //代理服务器的文件描述符
     struct sockaddr_in ProxyServerAddr;
@@ -64,15 +69,17 @@ public:
     set<string> BanList = {
         //"error.baidu.com",
         //"functional.events.data.microsoft.com:443",
-        //"baidu.com",
-        "c.urs.microsoft.com",
+        "baidu.com",
+        "www.baidu.com",
+        //"c.urs.microsoft.com",
         ""};
     set<string> PassList = {
         "error.baidu.com",
         "baidu.com",
         ""};
     map<string, string> TransList = {
-        {"", ""}};
+        {"www.baidu.com", "www.hit.edu.cn"},
+        {"www.bilibili.com", "www.hit.edu.cn"}};
 
     server(int ProxyServerPort);
     server();
@@ -85,7 +92,7 @@ public:
     void fcntlNonBlock(int); //设置非阻塞
 
     void DealListen();
-    int DealRead(int);
+    int DealRead(char *, int);
 
     int Recv(int, void *, size_t, int);
     int Send(int, const void *, size_t, int);

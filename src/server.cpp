@@ -24,7 +24,7 @@ void server::InitSocket()
     std::cout << "Server IP:" << ip << " port: " << this->ProxyServerPort << endl;
 
     bind(this->ProxyServerFd, (struct sockaddr *)&this->ProxyServerAddr, sizeof(this->ProxyServerAddr));
-    listen(this->ProxyServerFd, 15);
+    listen(this->ProxyServerFd, 10);
 
     //epoll init
     epoller->AddFd(this->ProxyServerFd, EPOLLIN);
@@ -57,16 +57,19 @@ int server::ConnectToServer(string host, int port)
     struct hostent *hostent = gethostbyname(host_c); //DNS
     if (!hostent)
     {
+#ifdef debug
         std::cout << "In hostent:failed! *********" << endl;
+#endif
         close(fd);
         return -1;
     }
     in_addr Inaddr = *((in_addr *)*hostent->h_addr_list);
-
+#ifdef printIP
     for (int i = 0; hostent->h_addr_list[i]; i++)
     {
         cout << "IP :" << inet_ntoa(*((struct in_addr *)hostent->h_addr_list[i])) << endl;
     }
+#endif
 
     //inet_pton(AF_INET, "111.13.100.92", &saddr.sin_addr.s_addr); //inet_ntoa(Inaddr)
     saddr.sin_addr.s_addr = inet_addr(inet_ntoa(Inaddr)); //connect error
@@ -78,8 +81,11 @@ int server::ConnectToServer(string host, int port)
         close(fd);
         return -1;
     }
+#ifdef debug
     std::cout << "already connect to server "
               << "host=" << host_c << "  port=" << port << endl;
+#endif
+    free(host_c);
 
     return fd;
 }
@@ -128,11 +134,14 @@ void server::Start()
             }
             else if (events & EPOLLIN)
             {
-                //char *buf;
-                int len = DealRead(fd);
-                this->tpl->commit(std::bind(&server::HandleHttpRequest, this, this->buffer, fd, len)); //TODO:
+                char *buffer = new char[this->MAXSIZE];
+                bzero(buffer, this->MAXSIZE);
+                int len = DealRead(buffer, fd);
+                this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, fd, len)); //TODO:
+                //HandleHttpRequest(fd, len);
             }
         }
+        //sleep(1);
     }
 }
 void server::DealListen()
@@ -148,6 +157,9 @@ void server::DealListen()
     int cfd = accept(this->ProxyServerFd, (struct sockaddr *)&clientAddr, &len);
     if (cfd <= 0)
         return;
+#ifdef IP
+    std::cout << "[IP]:" << inet_ntoa(clientAddr.sin_addr) << endl;
+#endif
 #ifdef debug
     std::cout << "fd:" << cfd << endl;
 #endif
@@ -157,13 +169,13 @@ void server::DealListen()
 #endif
 }
 
-int server::DealRead(int fd)
+int server::DealRead(char *buffer, int fd)
 {
 #ifdef debug
     std::cout << "Receive msg from a client..." << endl;
 #endif
     //char buffer[this->MAXSIZE] = {0};
-    int ret = Recv(fd, this->buffer, MAXSIZE, 0);
+    int ret = Recv(fd, buffer, MAXSIZE, 0);
     if (ret <= 0)
     {
         //和客户端断开连接，则取消对clientfd的监听，关闭为其打开的文件描述符
@@ -172,7 +184,7 @@ int server::DealRead(int fd)
     }
 #ifdef debug
     cout << "buffer:" << endl;
-    //puts(buffer);
+    puts(buffer);
     cout << "buffer size:" << ret << endl;
     std::cout << "Handle proxy logic...." << endl;
 #endif
@@ -209,19 +221,39 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
     {
         SendError(clientFd, "[Banned Host]");
         CloseConn(clientFd);
+        delete buffer;
+        //sleep(1);
         return;
     }
 
     string host = httpHeader.host;
+    string method = httpHeader.method;
+#ifdef debug
+    std::cout << "method:" << method << "  compare:" << method.compare("CONNECT") << endl;
+#endif
+
+    //不转发connect报文（因为这是发给代理服务器的）
+    if (method.compare("GET") != 0 && method.compare("POST") != 0)
+    {
+#ifdef debug
+        std::cout << "encounter a CONNECT msg" << std::endl;
+#endif
+        SendError(clientFd, "HTTP/1.0 200 Connection Established\r\nProxy-agent: Netscape-Proxy/1.1\r\n\r\n");
+        CloseConn(clientFd);
+        delete buffer;
+        //sleep(1);
+        return;
+    }
     int re;
     int fd = ConnectToServer(host, httpHeader.port);
+#ifdef run
+    std::cout << "[Host]:" << host << " [Port]:" << httpHeader.port << std::endl;
+#endif
     if (fd == -1)
     {
         SendError(clientFd, "Failed to Connect to server\n");
-        CloseConn(clientFd);
-        return;
+        goto error;
     }
-    //goto error;
 
 #ifdef debug
     std::cout << "sending http msg to server..." << endl;
@@ -236,53 +268,31 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
     std::cout << "send finished. waiting for reponse..." << endl;
 #endif
 
-    //char buf[65536];
-
-    fd_set fdread;
-    timeval tv;
-
     //获取应答
-
-    //bzero(buf, 65536);
     while (1) //recv
     {
-        FD_ZERO(&fdread);
-        FD_SET(fd, &fdread); //serversock
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-
-        int count = Recv(fd, this->buffer, MAXSIZE, 0);
-        //int count = Select(0, &fdread, NULL, NULL, &tv);
+        int count = Recv(fd, buffer, MAXSIZE, 0);
         if (count > 0)
         {
-            //int re = Recv(fd, this->buffer, strlen(sendBuffer) + 1, 0);
-            //if (re <= 0)
-            //{
-            //    SendError(clientFd, "error recv");
-            //    goto error;
-            //}
 #ifdef debug
             //puts(sendBuffer);
             std::cout << "count:" << count << endl;
             std::cout << "writing to client..." << endl;
 #endif
-            int re = Send(clientFd, this->buffer, count, 0);
+            int re = Send(clientFd, buffer, count, 0);
             if (re <= 0)
                 goto error;
 #ifdef debug
             std::cout << "receive msg from server:" << endl
                       << "-------------------------------" << endl;
 #endif
-            //if (FD_ISSET(fd, &fdread))
-            //{
-            //}
 #ifdef debug
             std::cout << "-------------------------------------" << endl;
 #endif
         }
         else
         {
-            SendError(clientFd, "Timeout");
+            SendError(clientFd, "Failure");
             goto error;
         }
     }
@@ -292,6 +302,8 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 error:
     CloseConn(clientFd);
     close(fd);
+    delete buffer;
+    //sleep(1);
     return;
 }
 
@@ -319,6 +331,8 @@ bool server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBu
         {
         case 'H': //Host
         {
+            if (p[1] != 'o' && p[1] != 'O')
+                break;
             char *ptr_port;
             char *p_without_port;
             p_without_port = strtok_r((p + 6), ":", &ptr_port);
@@ -336,6 +350,8 @@ bool server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBu
             break;
         }
         case 'C': //Cookie
+            if (p[1] != 'o' && p[1] != 'O')
+                break;
             if (strlen(p) > 8)
             {
                 char header[8];
@@ -356,19 +372,25 @@ bool server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBu
     puts(httpHeader->host);
     std::cout << "port:";
     std::cout << to_string(httpHeader->port) << std::endl;
+
 #endif
     string host = httpHeader->host;
 
     if (BanList.find(host) != BanList.end()) //BanList
     {
-        std::cout << "[Ban]:" << host << endl;
+#ifdef run
+        if (host.c_str()[0] != 0) //TODO:匹配到""则不打印
+            std::cout << "[Ban]:" << host << endl;
+#endif
         //CloseConn(clientFd);
         return false;
     }
     else if (TransList.find(host) != TransList.end()) //TransList
     {
-        std::cout << "[Trans]:" << host << endl;
         string target = TransList[host];
+#ifdef run
+        std::cout << "[Trans]:" << host << " TO " << target << std::endl;
+#endif
         const char *target_c = target.c_str();
         replace(sendBuffer, host, target);
         memcpy(httpHeader->host, target_c, target.length() + 1);
@@ -413,7 +435,9 @@ int server::Send(int fd, const void *buffer, size_t len, int flags)
 #endif
     if (re == -1)
     {
+#ifdef debug
         perror("send");
+#endif
     }
     else if (re == 0)
     {
@@ -426,7 +450,9 @@ int server::Select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfd
 
     if (count < 0) //recv
     {
+#ifdef debug
         perror("select");
+#endif
     }
     else if (count == 0) //服务器断开连接
     {
@@ -439,6 +465,9 @@ void server::SendError(int fd, char *buf)
     int ret = send(fd, buf, strlen(buf), 0);
     if (ret < 0)
     {
-        perror("senderorr");
+#ifdef debug
+        perror("senderror");
+        std::cout << "send error fd:" << fd << std::endl;
+#endif
     }
 }
