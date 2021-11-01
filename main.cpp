@@ -6,7 +6,7 @@ using namespace std;
 int main(int argc, char **args)
 {
     cout << "in main" << endl;
-    threadpool tpl{10};
+    threadpool tpl{4};
 
     server s = server(atoi(args[1]));
     s.tpl = &tpl;

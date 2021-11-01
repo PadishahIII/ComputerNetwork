@@ -27,6 +27,7 @@ void server::InitSocket()
     listen(this->ProxyServerFd, 8);
 
     //epoll init
+    epoller->AddFd(this->ProxyServerFd, EPOLLIN);
 }
 
 /**
@@ -57,7 +58,7 @@ int server::ConnectToServer(string host, int port)
     if (!hostent)
     {
         std::cout << "In hostent:failed! *********" << endl;
-        CloseConn(fd);
+        close(fd);
         return -1;
     }
     in_addr Inaddr = *((in_addr *)*hostent->h_addr_list);
@@ -74,7 +75,7 @@ int server::ConnectToServer(string host, int port)
     {
         std::cout << "connect error..." << endl;
         std::cout << "----------------------------------" << endl;
-        CloseConn(fd);
+        close(fd);
         return -1;
     }
     std::cout << "already connect to server "
@@ -127,7 +128,9 @@ void server::Start()
             }
             else if (events & EPOLLIN)
             {
-                DealRead(fd);
+                char *buf;
+                int len = DealRead(fd, buf);
+                this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buf, fd, len)); //TODO:
             }
         }
     }
@@ -154,18 +157,18 @@ void server::DealListen()
 #endif
 }
 
-void server::DealRead(int fd)
+int server::DealRead(int fd, char *buf)
 {
 #ifdef debug
     std::cout << "Receive msg from a client..." << endl;
 #endif
-    char buffer[MAXSIZE] = {0};
+    char buffer[this->MAXSIZE] = {0};
     int ret = Recv(fd, buffer, sizeof(buffer), 0);
     if (ret <= 0)
     {
         //和客户端断开连接，则取消对clientfd的监听，关闭为其打开的文件描述符
         CloseConn(fd);
-        return;
+        return ret;
     }
 #ifdef debug
     cout << "buffer:" << endl;
@@ -173,8 +176,11 @@ void server::DealRead(int fd)
     cout << "buffer size:" << ret << endl;
     std::cout << "Handle proxy logic...." << endl;
 #endif
+    buf = buffer;
+    return ret;
     //读取数据并处理HTTP请求
-    this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, fd, ret));
+
+    //this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buffer, fd, ret));
     //HandleHttpRequest(buffer, clientFd, len);
 }
 void server::CloseConn(int clientFd)
@@ -196,23 +202,33 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 
     //解析http头
     struct HttpHeader httpHeader;
-    char *sendBuffer = new char[buffersize + 1];
+    char sendBuffer[buffersize + 20];
     memset(sendBuffer, 0, sizeof(sendBuffer)); //'\0'
     memcpy(sendBuffer, buffer, buffersize);
-    ParseHttpHeader(buffer, &httpHeader, sendBuffer);
+    if (!ParseHttpHeader(buffer, &httpHeader, sendBuffer))
+    {
+        SendError(clientFd, "[Banned Host]");
+        CloseConn(clientFd);
+        return;
+    }
 
     string host = httpHeader.host;
     int re;
     int fd = ConnectToServer(host, httpHeader.port);
     if (fd == -1)
-        goto error;
+    {
+        SendError(clientFd, "Failed to Connect to server\n");
+        CloseConn(clientFd);
+        return;
+    }
+    //goto error;
 
 #ifdef debug
     std::cout << "sending http msg to server..." << endl;
 #endif
 
     //发送http报文
-    re = Send(fd, sendBuffer, buffersize, 0);
+    re = Send(fd, sendBuffer, strlen(sendBuffer) + 1, 0);
     if (re <= 0)
         goto error;
 
@@ -232,7 +248,7 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
     {
         FD_ZERO(&fdread);
         FD_SET(fd, &fdread); //serversock
-        tv.tv_sec = 1;
+        tv.tv_sec = 5;
         tv.tv_usec = 0;
 
         int count = Select(0, &fdread, NULL, NULL, &tv);
@@ -244,15 +260,18 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 #endif
             if (FD_ISSET(fd, &fdread))
             {
-                int re = Recv(fd, sendBuffer, sizeof(sendBuffer), 0);
+                int re = Recv(fd, sendBuffer, strlen(sendBuffer) + 1, 0);
                 if (re <= 0)
+                {
+                    SendError(clientFd, "error recv");
                     goto error;
+                }
 #ifdef debug
                 puts(sendBuffer);
                 std::cout << "cout:" << re << endl;
                 std::cout << "writing to client..." << endl;
 #endif
-                re = Send(fd, sendBuffer, re, 0);
+                re = Send(clientFd, sendBuffer, re, 0);
                 if (re <= 0)
                     goto error;
             }
@@ -261,19 +280,19 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
 #endif
         }
         else
-            goto error;
+            SendError(clientFd, "Timeout");
+        goto error;
     }
 #ifdef debug
     std::cout << "proxy logic finished" << endl;
 #endif
-    goto error; //TODO:
 error:
     CloseConn(clientFd);
     close(fd);
     return;
 }
 
-void server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBuffer)
+bool server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBuffer)
 {
     char *p;
     char *ptr;
@@ -341,7 +360,7 @@ void server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBu
     {
         std::cout << "[Ban]:" << host << endl;
         //CloseConn(clientFd);
-        return;
+        return false;
     }
     else if (TransList.find(host) != TransList.end()) //TransList
     {
@@ -352,6 +371,7 @@ void server::ParseHttpHeader(char buffer[], HttpHeader *httpHeader, char *sendBu
         memcpy(httpHeader->host, target_c, target.length() + 1);
         host = target;
     }
+    return true;
 }
 void replace(char buffer_c[], const string &oldstr, const string &newstr)
 {
@@ -363,7 +383,7 @@ void replace(char buffer_c[], const string &oldstr, const string &newstr)
     }
     memcpy(buffer_c, buffer.c_str(), buffer.length() + 1);
 }
-bool server::Recv(int fd, void *buffer, size_t size, int flags)
+int server::Recv(int fd, void *buffer, size_t size, int flags)
 {
     int len = recv(fd, buffer, size, flags);
 
@@ -373,18 +393,16 @@ bool server::Recv(int fd, void *buffer, size_t size, int flags)
 #ifdef debug
         std::cout << "error fd is:" << fd << endl;
 #endif
-        return false;
     }
     else if (len == 0) //收到了End of file
     {
 #ifdef debug
         std::cout << "A client has disconnected,fd=" << fd << endl; //应该在处理完这一次http请求后再断开
 #endif
-        return false;
     }
-    return true;
+    return len;
 }
-bool server::Send(int fd, const void *buffer, size_t len, int flags)
+int server::Send(int fd, const void *buffer, size_t len, int flags)
 {
     int re = send(fd, buffer, len, flags);
 #ifdef debug
@@ -393,28 +411,31 @@ bool server::Send(int fd, const void *buffer, size_t len, int flags)
     if (re == -1)
     {
         perror("send");
-        return false;
     }
     else if (re == 0)
     {
-        return false;
     }
-    return true;
+    return re;
 }
-bool server::Select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *tv)
+int server::Select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *tv)
 {
     int count = select(0, readfds, NULL, NULL, tv); //0代表不用内核检测，超时检测TODO:read=>select
 
     if (count < 0) //recv
     {
         perror("select");
-        return false;
     }
     else if (count == 0) //服务器断开连接
     {
-        return false;
     }
-    return true;
+    return count;
 }
 
-//Http header
+void server::SendError(int fd, char *buf)
+{
+    int ret = send(fd, buf, strlen(buf), 0);
+    if (ret < 0)
+    {
+        perror("senderorr");
+    }
+}

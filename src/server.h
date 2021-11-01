@@ -74,20 +74,22 @@ public:
 
     server(int ProxyServerPort);
     server();
-    void InitSocket();                                       //配置 socket bind listen epollinit
-    int ConnectToServer(string host, int port);              //代理服务器充当客户端访问其它服务器
-    void HandleHttpRequest(char *buffer, int clientFd, int); //处理客户端请求
-    void ParseHttpHeader(char *, HttpHeader *, char *);
+    void InitSocket();                          //配置 socket bind listen epollinit
+    int ConnectToServer(string host, int port); //代理服务器充当客户端访问其它服务器
+    void HandleHttpRequest(char *, int, int);   //处理客户端请求
+    bool ParseHttpHeader(char *, HttpHeader *, char *);
     void Start();
     void CloseConn(int);     //关闭fd
     void fcntlNonBlock(int); //设置非阻塞
 
     void DealListen();
-    void DealRead(int);
+    int DealRead(int, char *);
 
-    bool Recv(int, void *, size_t, int);
-    bool Send(int, const void *, size_t, int);
-    bool Select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+    int Recv(int, void *, size_t, int);
+    int Send(int, const void *, size_t, int);
+    int Select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+
+    void SendError(int, char *);
 };
 
 #endif
