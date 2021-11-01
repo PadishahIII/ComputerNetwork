@@ -24,7 +24,7 @@ void server::InitSocket()
     std::cout << "Server IP:" << ip << " port: " << this->ProxyServerPort << endl;
 
     bind(this->ProxyServerFd, (struct sockaddr *)&this->ProxyServerAddr, sizeof(this->ProxyServerAddr));
-    listen(this->ProxyServerFd, 8);
+    listen(this->ProxyServerFd, 15);
 
     //epoll init
     epoller->AddFd(this->ProxyServerFd, EPOLLIN);
@@ -128,9 +128,9 @@ void server::Start()
             }
             else if (events & EPOLLIN)
             {
-                char *buf;
-                int len = DealRead(fd, buf);
-                this->tpl->commit(std::bind(&server::HandleHttpRequest, this, buf, fd, len)); //TODO:
+                //char *buf;
+                int len = DealRead(fd);
+                this->tpl->commit(std::bind(&server::HandleHttpRequest, this, this->buffer, fd, len)); //TODO:
             }
         }
     }
@@ -157,13 +157,13 @@ void server::DealListen()
 #endif
 }
 
-int server::DealRead(int fd, char *buf)
+int server::DealRead(int fd)
 {
 #ifdef debug
     std::cout << "Receive msg from a client..." << endl;
 #endif
-    char buffer[this->MAXSIZE] = {0};
-    int ret = Recv(fd, buffer, sizeof(buffer), 0);
+    //char buffer[this->MAXSIZE] = {0};
+    int ret = Recv(fd, this->buffer, MAXSIZE, 0);
     if (ret <= 0)
     {
         //和客户端断开连接，则取消对clientfd的监听，关闭为其打开的文件描述符
@@ -172,11 +172,11 @@ int server::DealRead(int fd, char *buf)
     }
 #ifdef debug
     cout << "buffer:" << endl;
-    puts(buffer);
+    //puts(buffer);
     cout << "buffer size:" << ret << endl;
     std::cout << "Handle proxy logic...." << endl;
 #endif
-    buf = buffer;
+    //buf = buffer;
     return ret;
     //读取数据并处理HTTP请求
 
@@ -251,37 +251,40 @@ void server::HandleHttpRequest(char *buffer, int clientFd, int buffersize)
         tv.tv_sec = 5;
         tv.tv_usec = 0;
 
-        int count = Select(0, &fdread, NULL, NULL, &tv);
+        int count = Recv(fd, this->buffer, MAXSIZE, 0);
+        //int count = Select(0, &fdread, NULL, NULL, &tv);
         if (count > 0)
         {
+            //int re = Recv(fd, this->buffer, strlen(sendBuffer) + 1, 0);
+            //if (re <= 0)
+            //{
+            //    SendError(clientFd, "error recv");
+            //    goto error;
+            //}
+#ifdef debug
+            //puts(sendBuffer);
+            std::cout << "count:" << count << endl;
+            std::cout << "writing to client..." << endl;
+#endif
+            int re = Send(clientFd, this->buffer, count, 0);
+            if (re <= 0)
+                goto error;
 #ifdef debug
             std::cout << "receive msg from server:" << endl
                       << "-------------------------------" << endl;
 #endif
-            if (FD_ISSET(fd, &fdread))
-            {
-                int re = Recv(fd, sendBuffer, strlen(sendBuffer) + 1, 0);
-                if (re <= 0)
-                {
-                    SendError(clientFd, "error recv");
-                    goto error;
-                }
-#ifdef debug
-                puts(sendBuffer);
-                std::cout << "cout:" << re << endl;
-                std::cout << "writing to client..." << endl;
-#endif
-                re = Send(clientFd, sendBuffer, re, 0);
-                if (re <= 0)
-                    goto error;
-            }
+            //if (FD_ISSET(fd, &fdread))
+            //{
+            //}
 #ifdef debug
             std::cout << "-------------------------------------" << endl;
 #endif
         }
         else
+        {
             SendError(clientFd, "Timeout");
-        goto error;
+            goto error;
+        }
     }
 #ifdef debug
     std::cout << "proxy logic finished" << endl;

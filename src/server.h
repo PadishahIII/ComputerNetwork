@@ -48,10 +48,12 @@ void replace(char buffer_c[], const string &oldstr, const string &newstr);
 class server
 {
 public:
-    int HTTP_PORT = 80;
-    int MAXSIZE = 65507;
+    static const int HTTP_PORT = 80;
+    static const int MAXSIZE = 102400;
 
     threadpool *tpl; //线程池
+
+    char buffer[MAXSIZE];
 
     int ProxyServerFd; //代理服务器的文件描述符
     struct sockaddr_in ProxyServerAddr;
@@ -83,7 +85,7 @@ public:
     void fcntlNonBlock(int); //设置非阻塞
 
     void DealListen();
-    int DealRead(int, char *);
+    int DealRead(int);
 
     int Recv(int, void *, size_t, int);
     int Send(int, const void *, size_t, int);
